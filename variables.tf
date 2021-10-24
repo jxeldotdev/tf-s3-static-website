@@ -14,14 +14,6 @@ variable "service_role_name" {
   type = string
 }
 
-variable "ci_user" {
-  type = string
-}
-
-variable "pgp_key" {
-  type = string
-}
-
 variable "cloudfront_origin_access_identity" {
   type = map(string)
   default = {

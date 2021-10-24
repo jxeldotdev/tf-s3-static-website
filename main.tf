@@ -87,7 +87,7 @@ resource "aws_route53_record" "cert_validation" {
   zone_id         = var.zone_id
 }
 
-resource "aws_route53_record" "cert_validation" {
+resource "aws_route53_record" "domains" {
   for_each = toset(var.domains)
 
   name            = each.value
