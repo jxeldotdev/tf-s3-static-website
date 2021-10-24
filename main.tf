@@ -14,7 +14,7 @@ module "cdn" {
     404 = {
       error_code         = 404
       response_code      = 404
-      response_page_path = "/404.html"
+      response_page_path = "/index.html"
     }
   }
 
@@ -67,10 +67,10 @@ resource "aws_acm_certificate_validation" "cert" {
   certificate_arn         = aws_acm_certificate.cert.arn
   validation_record_fqdns = [for record in cloudflare_record.validation : record.hostname]
 
-  depends_on = [cloudflare_record.validation]
+  depends_on = [aws_route53_record.cert_validation]
 }
 
-resource "cloudflare_record" "validation" {
+resource "aws_route53_record" "cert_validation" {
   for_each = {
     for dvo in aws_acm_certificate.cert.domain_validation_options : dvo.domain_name => {
       name   = dvo.resource_record_name
@@ -78,25 +78,29 @@ resource "cloudflare_record" "validation" {
       type   = dvo.resource_record_type
     }
   }
-  name    = each.value.name
-  value   = trimsuffix(each.value.record, ".")
-  type    = each.value.type
-  zone_id = var.zone_id
 
-  depends_on = [aws_acm_certificate.cert]
+  allow_overwrite = true
+  name            = each.value.name
+  records         = [each.value.record]
+  ttl             = 60
+  type            = each.value.type
+  zone_id         = var.zone_id
 }
 
-resource "cloudflare_record" "website" {
+resource "aws_route53_record" "cert_validation" {
   for_each = toset(var.domains)
-  zone_id  = var.zone_id
-  name     = each.key
-  type     = "CNAME"
-  value    = module.cdn.cloudfront_distribution_domain_name
+
+  name            = each.value
+  records         = module.cdn.cloudfront_distribution_domain_name
+  ttl             = 60
+  type            = "CNAME"
+  zone_id         = var.zone_id
 }
 
 resource "aws_s3_bucket" "site" {
   bucket = var.bucket_name
   acl    = "public-read"
+  /* Might need to be changed */
   website {
     index_document = "index.html"
     error_document = "404.html"
@@ -121,105 +125,4 @@ resource "aws_s3_bucket_policy" "site" {
   policy = data.aws_iam_policy_document.site.json
 
   depends_on = [module.cdn]
-}
-
-######################################
-## Role used by CI / GitHub Actions ##
-######################################
-
-data "aws_caller_identity" "current" {}
-
-resource "aws_iam_role" "service_role" {
-  name               = var.service_role_name
-  path               = "/"
-  assume_role_policy = data.aws_iam_policy_document.assume_role_policy.json
-}
-
-resource "aws_iam_role_policy_attachment" "service_role" {
-  role       = aws_iam_role.service_role.name
-  policy_arn = module.service_role_policy.arn
-}
-
-data "aws_iam_policy_document" "assume_role_policy" {
-  statement {
-    actions = ["sts:AssumeRole"]
-
-    principals {
-      type        = "AWS"
-      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
-    }
-  }
-}
-
-// required for gh actions to assume role
-data "aws_iam_policy_document" "tag_role" {
-  statement {
-    actions = ["sts:TagSession"]
-    resources = ["*"]
-  }
-}
-
-module "tag_role_policy" {
-  source  = "terraform-aws-modules/iam/aws//modules/iam-policy"
-  version = "~> 3.0"
-
-  name        = "AllowTagRoleOnAll"
-  path        = "/"
-  description = ""
-  policy      = data.aws_iam_policy_document.tag_role.json
-}
-
-resource "aws_iam_group_policy_attachment" "tag_role_policy" {
-  group      = module.service_role_group.group_name
-  policy_arn = module.tag_role_policy.arn
-}
-
-
-data "aws_iam_policy_document" "service_role_permissions" {
-  statement {
-    actions   = ["s3:GetObject", "s3:ListBucket", "s3:DeleteObject", "s3:PutObject"]
-    resources = [aws_s3_bucket.site.arn, "${aws_s3_bucket.site.arn}/*"]
-  }
-  statement {
-    actions = [
-      "cloudfront:CreateInvalidation",
-      "cloudfront:GetInvalidation",
-      "cloudfront:ListInvalidations",
-      "cloudfront:GetDistribution"
-    ]
-    resources = [module.cdn.cloudfront_distribution_arn]
-  }
-}
-
-module "service_role_policy" {
-  source  = "terraform-aws-modules/iam/aws//modules/iam-policy"
-  version = "~> 3.0"
-
-  name        = var.service_role_name
-  path        = "/"
-  description = "Grants permissions to CI Service role to manage s3 bucket and invalidate cloudfront cache"
-  policy      = data.aws_iam_policy_document.service_role_permissions.json
-
-  depends_on = [module.cdn]
-}
-
-module "service_role_group" {
-  source = "terraform-aws-modules/iam/aws//modules/iam-group-with-assumable-roles-policy"
-
-  name            = var.service_role_group
-  assumable_roles = [aws_iam_role.service_role.arn]
-  group_users     = [module.service_user.iam_user_name]
-
-  depends_on = [module.service_user, aws_iam_role.service_role]
-}
-
-module "service_user" {
-  source = "terraform-aws-modules/iam/aws//modules/iam-user"
-
-  name = var.service_user
-
-  create_iam_user_login_profile = false
-  create_iam_access_key         = true
-  pgp_key                       = var.pgp_key
-  force_destroy                 = true
 }

@@ -14,11 +14,7 @@ variable "service_role_name" {
   type = string
 }
 
-variable "service_role_group" {
-  type = string
-}
-
-variable "service_user" {
+variable "ci_user" {
   type = string
 }
 
